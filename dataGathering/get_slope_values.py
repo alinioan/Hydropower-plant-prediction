@@ -6,7 +6,7 @@ import rasterio
 import tempfile
 from shapely.geometry import Point
 import geopandas as gpd
-from powerplant_data import get_hydropower_data
+from dataGathering.locations import get_hydropower_locations
 
 AUTH_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
 
@@ -27,7 +27,7 @@ def get_slope(lat, lon):
     Simplified version using only DEM data without water masking
     Use this if the water masking version has issues
     """
-    # Create bbox around the plant (~300m x 300m)
+    # Create bbox around the plant (~500m x 500m)
     buffer_deg = 0.0045  # ~500 m at equator
     bbox = [lon - buffer_deg, lat - buffer_deg, lon + buffer_deg, lat + buffer_deg]
     
@@ -102,7 +102,7 @@ def get_slope(lat, lon):
             return np.nanmean(slope_degrees)
 
 def main():
-    powerplant_locations = get_hydropower_data()
+    powerplant_locations = get_hydropower_locations()
     
     # Loop over plants and fetch slope
     results = []

@@ -6,7 +6,7 @@ import rasterio
 import tempfile
 from shapely.geometry import Point
 import geopandas as gpd
-from powerplant_data import get_hydropower_data
+from dataGathering.locations import get_hydropower_locations
 
 AUTH_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
 
@@ -148,7 +148,7 @@ def get_ndvi(lat, lon, start_date="2024-04-01", end_date="2024-09-30"):
 			return np.nanmean(arr)
 
 def main():
-	powerplant_locations = get_hydropower_data()
+	powerplant_locations = get_hydropower_locations()
 	
 	# Loop over plants and fetch NDVI
 	results = []
