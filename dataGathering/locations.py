@@ -27,7 +27,7 @@ def get_hydropower_locations():
     powerplant_locations = hydro_europe_df[['name', 'latitude', 'longitude']]
     return powerplant_locations
 
-def get_random_river_locations(sample_size=5000, random_state=42):
+def get_random_river_locations(sample_size=9000, random_state=42):
     """
     Generates random locations alongside rivers, outside hydropower plant exclusion zones.
     """
@@ -62,7 +62,7 @@ def get_random_river_locations(sample_size=5000, random_state=42):
 
     # uncomment the next line to save the sampled rivers to a shapefile
     # sampled_rivers.to_file("out/random_negative_rivers.shp")
-    
+
     sampled_rivers["first_coord"] = sampled_rivers.geometry.apply(
         lambda geom: list(geom.coords)[0] if geom.geom_type == "LineString" 
         else list(list(geom.geoms)[0].coords)[0]
@@ -73,3 +73,12 @@ def get_random_river_locations(sample_size=5000, random_state=42):
         index=sampled_rivers.index
     )
     return sampled_rivers[["latitude", "longitude"]]
+
+
+def get_locations():
+    powerplant_locations = get_hydropower_locations()
+    random_rivers = get_random_river_locations()
+    locations = pd.concat([powerplant_locations, random_rivers], ignore_index=True)
+
+    print(locations)
+    return locations
