@@ -1,4 +1,5 @@
 .venv/
+.lib/
 .vscode/
 __pycache__/
 clinet.txt
