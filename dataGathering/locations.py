@@ -7,7 +7,7 @@ def get_hydropower_locations():
     Fetches hydropower plant data from the global power plant database.
     Filters for European countries and returns a DataFrame with plant names and locations.
     """
-    df = pd.read_csv('../data/GloHydroRes_vs1.csv', low_memory=False)
+    df = pd.read_csv('data/GloHydroRes_vs1.csv', low_memory=False)
     df = df.rename(columns={
         'plant_lat': 'latitude',
         'plant_lon': 'longitude',
@@ -27,15 +27,15 @@ def get_hydropower_locations():
     powerplant_locations = hydro_europe_df[['name', 'latitude', 'longitude']]
     return powerplant_locations
 
-def get_random_river_locations(sample_size=9000, random_state=42):
+def get_random_river_locations(sample_size=5000, random_state=42):
     """
     Generates random locations alongside rivers, outside hydropower plant exclusion zones.
     """
     rivers = gpd.read_file("data/HydroRIVERS_v10_eu_shp/HydroRIVERS_v10_eu.shp")  # HydroSHEDS Europe shapefile
     
-    # Filter rivers with average discharge >= 2 cubic meters per second
-    rivers_big = rivers[rivers["DIS_AV_CMS"] >= 2]
-    rivers = rivers_big
+    # Filter rivers by discharge
+    filtered_rivers = rivers[(rivers["DIS_AV_CMS"] <= 10) & (rivers["DIS_AV_CMS"] >= 1.2)]
+    rivers = filtered_rivers
 
     rivers = rivers.to_crs(epsg=3857)  # Project for distance calculations
     powerplant_locations = get_hydropower_locations()
@@ -80,5 +80,4 @@ def get_locations():
     random_rivers = get_random_river_locations()
     locations = pd.concat([powerplant_locations, random_rivers], ignore_index=True)
 
-    print(locations)
     return locations
