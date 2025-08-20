@@ -7,7 +7,7 @@ def get_hydropower_locations():
     Fetches hydropower plant data from the global power plant database.
     Filters for European countries and returns a DataFrame with plant names and locations.
     """
-    df = pd.read_csv('data/GloHydroRes_vs1.csv', low_memory=False)
+    df = pd.read_csv('../data/GloHydroRes_vs1.csv', low_memory=False)
     df = df.rename(columns={
         'plant_lat': 'latitude',
         'plant_lon': 'longitude',
