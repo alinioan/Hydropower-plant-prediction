@@ -41,10 +41,14 @@ def get_precipitation(lat, lon, start_date="2024-01-01", end_date="2024-12-31"):
 
 def main():
 	locations = get_locations()
+	locations["latitude"] = locations["latitude"].round(6)
+	locations["longitude"] = locations["longitude"].round(6)
 
 	#load intermediate results if available
 	try:
 		inter_precip_df = pd.read_csv("data/intermediary/precipitation_intermediate.csv")
+		inter_precip_df["latitude"] = inter_precip_df["latitude"].round(6)
+		inter_precip_df["longitude"] = inter_precip_df["longitude"].round(6)
 		print("Loaded intermediate precipitation results.")
 	except FileNotFoundError:
 		inter_precip_df = pd.DataFrame(columns=["name", "latitude", "longitude", "precipitation"])
@@ -53,12 +57,13 @@ def main():
 	# Loop over plants and fetch precipitation
 	results = []
 	for _, row in tqdm(locations.iterrows(), total=len(locations), desc="Fetching precipitation"):
+		
 		mask = (
 			(inter_precip_df['longitude'] == row['longitude']) &
 			(inter_precip_df['latitude'] == row['latitude'])
 		)
 		if mask.any():
-			print(f"Skipping {row['name']} as it already exists in intermediate results.")
+			print(f"Skipping {row['name']} at ({row['latitude']}, {row['longitude']}) as it already exists in intermediate results.")
 			results.append({
 				"name": row['name'],
 				"latitude": row['latitude'],
