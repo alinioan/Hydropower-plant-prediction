@@ -161,7 +161,7 @@ def main():
     powerplant_locations = get_hydropower_locations()
     
     results = []
-    for _, row in powerplant_locations.head(10).iterrows():
+    for _, row in powerplant_locations.iterrows():
         print(f"Processing {row['name']} at ({row['latitude']}, {row['longitude']})")
         try:
             mndwi_val = get_mndwi(row['latitude'], row['longitude'], start_date="2024-04-01", end_date="2024-09-30", session=session)
