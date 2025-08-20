@@ -4,6 +4,8 @@ import requests
 import numpy as np
 import rasterio
 import tempfile
+import time
+from tqdm import tqdm
 from locations import get_hydropower_locations, get_locations
 
 AUTH_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
@@ -19,6 +21,27 @@ ACCESS_TOKEN = token_response.json()["access_token"]
 HEADERS = {
     "Authorization": f"Bearer {ACCESS_TOKEN}"
 }
+
+def refresh_token():
+    """
+    Refresh the access token using the refresh token
+    """
+    global ACCESS_TOKEN, HEADERS
+    
+    token_response = requests.post(AUTH_URL, data=AUTH_DATA)
+    print(f"Token response: {token_response.status_code} {token_response.text}")
+    ACCESS_TOKEN = token_response.json()["access_token"]
+    HEADERS = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}"
+    }
+
+    if token_response.status_code == 200:
+        new_token = token_response.json()
+        ACCESS_TOKEN = new_token["access_token"]
+        HEADERS["Authorization"] = f"Bearer {ACCESS_TOKEN}"
+        print("Token refreshed successfully.")
+    else:
+        print(f"Failed to refresh token: {token_response.status_code} {token_response.text}")
 
 def get_slope(lat, lon):
     """
@@ -75,6 +98,8 @@ def get_slope(lat, lon):
     
     if resp.status_code != 200:
         print(f"Error {resp.status_code}: {resp.text}")
+        if resp.status_code == 401 and "expired" in resp.text:
+            refresh_token()
         return None
     
     # Calculate slope from DEM
@@ -102,12 +127,40 @@ def get_slope(lat, lon):
 def main():
     locations = get_locations()
     
+    # Load intermediate results if available
+    try:
+        inter_slope_df = pd.read_csv("data/intermediary/slope_intermediate.csv")
+        print("Loaded intermediate slope results.")
+    except FileNotFoundError:
+        inter_slope_df = pd.DataFrame(columns=["name", "latitude", "longitude", "slope_degrees"])
+        print("No intermediate slope results found. Starting fresh.")
+
     # Loop over plants and fetch slope
     results = []
-    for _, row in locations.head(20).iterrows():
+    for _, row in tqdm(locations.iterrows(), total=len(locations), desc="Fetching slope values"):
+        mask = (
+            (inter_slope_df['longitude'] == row['longitude']) &
+            (inter_slope_df['latitude'] == row['latitude'])
+        )
+        if mask.any():
+            print(f"Skipping {row['name']} as it already exists in intermediate results.")
+            results.append({
+                "name": row['name'],
+                "latitude": row['latitude'],
+                "longitude": row['longitude'],
+                "slope_degrees": inter_slope_df.loc[(inter_slope_df['longitude'] == row['longitude'])
+                                                    & (inter_slope_df['latitude'] == row['latitude'])
+                                                    , 'slope_degrees'].values[0]
+            })
+            continue
+
         print(f"Processing {row['name']} at ({row['latitude']}, {row['longitude']})")
         
         slope_val = get_slope(row['latitude'], row['longitude'])
+
+        if slope_val is None:
+            print(f"Failed to fetch slope data for {row['name']}. Retrying...")
+            slope_val = get_slope(row['latitude'], row['longitude'])
 
         results.append({
             "name": row['name'],
@@ -115,7 +168,11 @@ def main():
             "longitude": row['longitude'],
             "slope_degrees": slope_val
         })
-    
+
+        if len(results) % 200 == 0 and len(results) > 0:
+            inter_slope_df = pd.DataFrame(results)
+            inter_slope_df.to_csv("data/intermediary/slope_intermediate.csv", index=False)
+
     slope_df = pd.DataFrame(results)
     print(slope_df)
     slope_df.to_csv("data/results/hydropower_slopes.csv", index=False)

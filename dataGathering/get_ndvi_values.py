@@ -4,6 +4,10 @@ import requests
 import numpy as np
 import rasterio
 import tempfile
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
+from tqdm import tqdm
 from locations import get_hydropower_locations, get_locations
 
 AUTH_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
@@ -22,6 +26,26 @@ HEADERS = {
 	"Authorization": f"Bearer {ACCESS_TOKEN}"
 }
 
+def refresh_token():
+	"""
+	Refresh the access token using the refresh token
+	"""
+	global ACCESS_TOKEN, HEADERS
+	
+	token_response = requests.post(AUTH_URL, data=AUTH_DATA)
+	print(f"Token response: {token_response.status_code} {token_response.text}")
+	ACCESS_TOKEN = token_response.json()["access_token"]
+	HEADERS = {
+		"Authorization": f"Bearer {ACCESS_TOKEN}"
+	}
+
+	if token_response.status_code == 200:
+		new_token = token_response.json()
+		ACCESS_TOKEN = new_token["access_token"]
+		HEADERS["Authorization"] = f"Bearer {ACCESS_TOKEN}"
+		print("Token refreshed successfully.")
+	else:
+		print(f"Failed to refresh token: {token_response.status_code} {token_response.text}")
 
 # NDVI extraction function (Processing API)
 def get_ndvi(lat, lon, start_date="2024-04-01", end_date="2024-09-30"):
@@ -133,6 +157,8 @@ def get_ndvi(lat, lon, start_date="2024-04-01", end_date="2024-09-30"):
 
 	if resp.status_code != 200:
 		print(f"Error {resp.status_code}: {resp.text}")
+		if resp.status_code == 401 and "expired" in resp.text:
+			refresh_token()
 		return None
 
 	# Save TIFF to temp file and compute mean NDVI
@@ -145,24 +171,68 @@ def get_ndvi(lat, lon, start_date="2024-04-01", end_date="2024-09-30"):
 			arr[arr == src.nodata] = np.nan
 			return np.nanmean(arr)
 
-def main():
-	locations = get_locations()
-	
-	# Loop over plants and fetch NDVI
-	results = []
-	for _, row in locations.head(20).iterrows():
-		print(f"Processing {row['name']} at ({row['latitude']}, {row['longitude']})")
-		ndvi_val = get_ndvi(row['latitude'], row['longitude'])
-		results.append({
-			"name": row['name'],
-			"latitude": row['latitude'],
-			"longitude": row['longitude'],
-			"ndvi": ndvi_val
-		})
+def process_location(row, inter_ndvi_df):
+    """Fetch NDVI for a single location (thread-safe worker)."""
+    if row['name'] in inter_ndvi_df['name'].values:
+        return {
+            "name": row['name'],
+            "latitude": row['latitude'],
+            "longitude": row['longitude'],
+            "ndvi": inter_ndvi_df.loc[
+                (inter_ndvi_df['longitude'] == row['longitude']) &
+                (inter_ndvi_df['latitude'] == row['latitude']),
+                'ndvi'
+            ].values[0]
+        }
 
-	ndvi_df = pd.DataFrame(results)
-	print(ndvi_df)
-	ndvi_df.to_csv("data/results/hydropower_ndvi.csv", index=False)
-	
+    ndvi_val = get_ndvi(row['latitude'], row['longitude'])
+    if ndvi_val is None:
+        ndvi_val = get_ndvi(row['latitude'], row['longitude'])
+
+    return {
+        "name": row['name'],
+        "latitude": row['latitude'],
+        "longitude": row['longitude'],
+        "ndvi": ndvi_val
+    }
+
+def main():
+    locations = get_locations()
+
+    # Load intermediate results if available
+    try:
+        inter_ndvi_df = pd.read_csv("data/intermediary/ndvi_intermediate.csv")
+        print("Loaded intermediate NDVI results.")
+    except FileNotFoundError:
+        inter_ndvi_df = pd.DataFrame(columns=["name", "latitude", "longitude", "ndvi"])
+        print("No intermediate NDVI results found. Starting fresh.")
+
+    results = []
+    max_workers = 8  # adjust depending on your API rate limits
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(process_location, row, inter_ndvi_df): row['name']
+            for _, row in locations.iterrows()
+        }
+
+        # tqdm progress bar for completed futures
+        for i, future in enumerate(tqdm(as_completed(futures), total=len(futures), desc="Fetching NDVI")):
+            try:
+                res = future.result()
+                if res:
+                    results.append(res)
+            except Exception as e:
+                print(f"Error processing {futures[future]}: {e}")
+
+            # Save progress every 75 results
+            if (i + 1) % 75 == 0:
+                inter_ndvi_df = pd.DataFrame(results)
+                inter_ndvi_df.to_csv("data/intermediary/ndvi_intermediate.csv", index=False)
+
+    ndvi_df = pd.DataFrame(results)
+    print(ndvi_df)
+    ndvi_df.to_csv("data/results/hydropower_ndvi.csv", index=False)
+
 if __name__ == "__main__":
 	main()
