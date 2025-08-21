@@ -53,7 +53,7 @@ def get_mndwi(lat, lon, start_date, end_date, session):
     function setup() {
       return {
         input: [{
-          bands: ["B03", "B11", "SCL"],
+          bands: ["B11", "B03", "SCL"],
           units: "DN"
         }],
         output: [
@@ -91,9 +91,9 @@ def get_mndwi(lat, lon, start_date, end_date, session):
       for (var j = 0; j < validSamples.length; j++) {
         sum += validSamples[j];
       }
-      var meanMndwi = sum / validSamples.length;
+      var meanmndwi = sum / validSamples.length;
       
-      return { mndwi: [meanMndwi] };
+      return { mndwi: [meanmndwi] };
     }
     """
 
@@ -127,19 +127,20 @@ def get_mndwi(lat, lon, start_date, end_date, session):
     }
 
     resp = session.post(API_URL, json=payload)
-        
-    if resp.status_code != 200:
+
+    if resp.status_code == 401:  
+        return None, 401
+    elif resp.status_code != 200:
         print(f"Error {resp.status_code}: {resp.text}")
-        return None
+        return None, resp.status_code
 
     with tempfile.NamedTemporaryFile(suffix=".tiff") as tmpfile:
         tmpfile.write(resp.content)
         tmpfile.flush()
         with rasterio.open(tmpfile.name) as src:
-            arr = src.read(1)
-            arr = arr.astype(np.float32)
+            arr = src.read(1).astype(np.float32)
             arr[arr == src.nodata] = np.nan
-            return np.nanmean(arr)
+            return np.nanmean(arr), 200
 
 
 def main():
@@ -163,21 +164,18 @@ def main():
     results = []
     for _, row in powerplant_locations.iterrows():
         print(f"Processing {row['name']} at ({row['latitude']}, {row['longitude']})")
-        try:
-            mndwi_val = get_mndwi(row['latitude'], row['longitude'], start_date="2024-04-01", end_date="2024-09-30", session=session)
-        except requests.exceptions.RequestException as e:
-            if "401" in str(e):
-                print("Access token expired. Refreshing...")
-                try:
-                    access_token = refresh_access_token(refresh_token)
-                    session.headers.update({"Authorization": f"Bearer {access_token}"})
-                    mndwi_val = get_mndwi(row['latitude'], row['longitude'], start_date="2024-04-01", end_date="2024-09-30", session=session)
-                except Exception as refresh_e:
-                    print(f"Failed to refresh token: {refresh_e}")
-                    mndwi_val = None
-            else:
-                print(f"An error occurred: {e}")
-                mndwi_val = None
+
+        mndwi_val, status = get_mndwi(row['latitude'], row['longitude'],
+                                start_date="2024-04-01", end_date="2024-09-30",
+                                session=session)
+
+        if status == 401:
+            print("Access token expired. Refreshing...")
+            access_token = refresh_access_token(refresh_token)
+            session.headers.update({"Authorization": f"Bearer {access_token}"})
+            mndwi_val, status = get_mndwi(row['latitude'], row['longitude'],
+                                    start_date="2024-04-01", end_date="2024-09-30",
+                                    session=session)
 
         results.append({
             "name": row['name'],
@@ -185,8 +183,9 @@ def main():
             "longitude": row['longitude'],
             "mndwi": mndwi_val
         })
+        mndwi_df = pd.DataFrame(results)
 
-    mndwi_df = pd.DataFrame(results)
+    print("\n--- Final Results ---")
     print(mndwi_df)
     mndwi_df.to_csv("../data/results/hydropower_mndwi.csv", index=False)
     

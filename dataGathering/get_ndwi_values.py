@@ -128,7 +128,7 @@ def get_ndwi(lat, lon, start_date, end_date, session):
 
     resp = session.post(API_URL, json=payload)
 
-    if resp.status_code == 401:  # token expired
+    if resp.status_code == 401:  
         return None, 401
     elif resp.status_code != 200:
         print(f"Error {resp.status_code}: {resp.text}")
@@ -184,10 +184,9 @@ def main():
             "ndwi": ndwi_val
         })
         ndwi_df = pd.DataFrame(results)
-
-    print("\n--- Final Results ---")
-    print(ndwi_df)
-    ndwi_df.to_csv("../data/results/hydropower_ndwi.csv", index=False)
+        ndwi_df.to_csv("../data/results/hydropower_ndwi.csv", index=False)
+    
+    print("It Done")
     
 if __name__ == "__main__":
     main()
