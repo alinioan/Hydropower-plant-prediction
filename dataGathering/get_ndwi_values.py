@@ -28,8 +28,8 @@ def get_tokens(username, password):
     else:
         raise Exception("Failed to retrieve tokens:", response.status_code, response.text)
 
-def refresh_access_token(refresh_token):
-    print("Refreshing access token...")
+def refresh_tokens(refresh_token):
+    print("Refreshing tokens...")
     response = requests.post(
         AUTH_URL,
         data={
@@ -39,9 +39,9 @@ def refresh_access_token(refresh_token):
         }
     )
     if response.status_code == 200:
-        return response.json()["access_token"]
+        return response.json()
     else:
-        raise Exception("Failed to refresh access token:", response.status_code, response.text)
+        raise Exception("Failed to refresh tokens:", response.status_code, response.text)
 
 
 def get_ndwi(lat, lon, start_date, end_date, session):
@@ -184,12 +184,22 @@ def main():
 
         if status == 401:
             print("Access token expired. Refreshing...")
-            access_token = refresh_access_token(refresh_token)
-            session.headers.update({"Authorization": f"Bearer {access_token}"})
-            ndwi_val, status = get_ndwi(row['latitude'], row['longitude'],
-                                    start_date="2024-04-01", end_date="2024-09-30",
-                                    session=session)
+            try:
+                new_token_data = refresh_tokens(refresh_token)
+                access_token = new_token_data["access_token"]
+                refresh_token = new_token_data["refresh_token"]
         
+                print("Tokens refreshed successfully.")
+
+                session.headers.update({"Authorization": f"Bearer {access_token}"})
+
+                ndwi_val, status = get_ndwi(row['latitude'], row['longitude'],
+                                        start_date="2024-04-01", end_date="2024-09-30",
+                                        session=session)
+            except Exception as e:
+                print(f"Fatal error during token refresh: {e}")
+                print("Exiting script. Please re-authenticate.")
+                break
         if status == 200 and ndwi_val is not None:
             new_result_df = pd.DataFrame([{
                 "name": row['name'],
