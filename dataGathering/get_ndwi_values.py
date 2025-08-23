@@ -160,9 +160,22 @@ def main():
         return
 
     powerplant_locations = get_hydropower_locations()
+    results_file = "../data/results/hydropower_ndwi.csv"
     
-    results = []
+    try:
+        existing_df = pd.read_csv(results_file)
+        processed_names = set(existing_df['name'])
+        print(f"Found {len(processed_names)} existing records. They will be skipped.")
+    except (FileNotFoundError, pd.errors.EmptyDataError):
+        processed_names = set()
+        pd.DataFrame(columns=['name', 'latitude', 'longitude', 'ndwi']).to_csv(results_file, index=False)
+
+    
     for _, row in powerplant_locations.iterrows():
+        
+        if row["name"] in processed_names:
+            continue
+                
         print(f"Processing {row['name']} at ({row['latitude']}, {row['longitude']})")
 
         ndwi_val, status = get_ndwi(row['latitude'], row['longitude'],
@@ -176,16 +189,18 @@ def main():
             ndwi_val, status = get_ndwi(row['latitude'], row['longitude'],
                                     start_date="2024-04-01", end_date="2024-09-30",
                                     session=session)
+        
+        if status == 200 and ndwi_val is not None:
+            new_result_df = pd.DataFrame([{
+                "name": row['name'],
+                "latitude": row['latitude'],
+                "longitude": row['longitude'],
+                "ndwi": ndwi_val
+            }])
+            new_result_df.to_csv(results_file, mode='a', header=False, index=False)
+            
+            processed_names.add(row['name'])
 
-        results.append({
-            "name": row['name'],
-            "latitude": row['latitude'],
-            "longitude": row['longitude'],
-            "ndwi": ndwi_val
-        })
-        ndwi_df = pd.DataFrame(results)
-        ndwi_df.to_csv("../data/results/hydropower_ndwi.csv", index=False)
-    
     print("It Done")
     
 if __name__ == "__main__":
