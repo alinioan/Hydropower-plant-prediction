@@ -28,7 +28,7 @@ def get_tokens(username, password):
     else:
         raise Exception("Failed to retrieve tokens:", response.status_code, response.text)
 
-def refresh_access_token(refresh_token):
+def refresh_tokens(refresh_token):
     print("Refreshing access token...")
     response = requests.post(
         AUTH_URL,
@@ -39,7 +39,7 @@ def refresh_access_token(refresh_token):
         }
     )
     if response.status_code == 200:
-        return response.json()["access_token"]
+        return response.json()
     else:
         raise Exception("Failed to refresh access token:", response.status_code, response.text)
 
@@ -151,43 +151,48 @@ def main():
         token_data = get_tokens(username, password)
         access_token = token_data["access_token"]
         refresh_token = token_data["refresh_token"]
-        
         session = requests.Session()
-        session.headers.update({"Authorization": f"Bearer {access_token}"})
-        
+        session.header.updadate({"Authorization": f"Bearer {access_token}"})
     except Exception as e:
-        print(f"Authentication failed: {e}")
+        print(f"Authentifiation failed: {e}")
         return
-
     powerplant_locations = get_hydropower_locations()
-    
-    results = []
+    results_file = "../data/results/hydropower_ndbi.csv"
+
+    try:
+        existing_df = pd.read.csv(results_file)
+        processed_names = set(existing_df['name'])
+        print(f"Found {len(processed_names)} existing records. They will be skipped.")
+    except (FileNotFoundError, pd.errors.EmptyDataError):
+        processed_names = set()
+        pd.DataFrame(columns=['name', 'latitude', 'longitude', 'ndbi']).to_csv(results_file, index = False)
+        
     for _, row in powerplant_locations.iterrows():
+        if row["name"] in processed_names:
+            continue
+        
         print(f"Processing {row['name']} at ({row['latitude']}, {row['longitude']})")
-
-        ndbi_val, status = get_ndbi(row['latitude'], row['longitude'],
-                                start_date="2024-04-01", end_date="2024-09-30",
-                                session=session)
-
+        ndbi_val, status = get_ndbi(row["latitude"], row["longitude"],
+                                    start_date = "2024-04-01", end_date = "2024-09-30",
+                                    session = session)
+        
         if status == 401:
-            print("Access token expired. Refreshing...")
-            access_token = refresh_access_token(refresh_token)
-            session.headers.update({"Authorization": f"Bearer {access_token}"})
-            ndbi_val, status = get_ndbi(row['latitude'], row['longitude'],
-                                    start_date="2024-04-01", end_date="2024-09-30",
-                                    session=session)
-
-        results.append({
-            "name": row['name'],
-            "latitude": row['latitude'],
-            "longitude": row['longitude'],
-            "ndbi": ndbi_val
-        })
-        ndbi_df = pd.DataFrame(results)
-
-    print("\n--- Final Results ---")
-    print(ndbi_df)
-    ndbi_df.to_csv("../data/results/hydropower_ndbi.csv", index=False)
+            print("Access token expired, Refreshing....")
+            try:
+                new_token_data = refresh_tokens(refresh_token)
+                access_token = new_token_data["access_token"]
+                refresh_token = new_token_data["refresh_token"]
+                
+                print("Tokens refreshed successfully.")
+                
+                session.headers.update({"Authorization": f"Bearer {access_token}"})
+                ndbi_val, status = get_ndbi(row["latitude"], row["longitude"],
+                                    start_date = "2024-04-01", end_date = "2024-09-30",
+                                    session = session)
+    
+            except Exception as e:
+                print(f"Fatal error during token: {e}")
+                print()
     
 if __name__ == "__main__":
     main()

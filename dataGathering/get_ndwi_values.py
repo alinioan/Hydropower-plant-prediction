@@ -144,8 +144,8 @@ def get_ndwi(lat, lon, start_date, end_date, session):
 
 
 def main():
-    username = input("Enter your email:")
-    password = getpass.getpass("Enter your password:")
+    username = "cristicristi532@gmail.com"
+    password = "Nak$4MpK#H8YShY"
     
     try:
         token_data = get_tokens(username, password)
@@ -199,6 +199,7 @@ def main():
             except Exception as e:
                 print(f"Fatal error during token refresh: {e}")
                 print("Exiting script. Please re-authenticate.")
+                main()
                 break
         if status == 200 and ndwi_val is not None:
             new_result_df = pd.DataFrame([{
