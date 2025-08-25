@@ -6,6 +6,7 @@ import numpy as np
 import rasterio
 import tempfile
 import pandas as pd
+import time
 from locations import get_hydropower_locations
 
 CLIENT_ID = "cdse-public"
@@ -28,8 +29,8 @@ def get_tokens(username, password):
     else:
         raise Exception("Failed to retrieve tokens:", response.status_code, response.text)
 
-def refresh_access_token(refresh_token):
-    print("Refreshing access token...")
+def refresh_tokens(refresh_token):
+    print("Refreshing tokens...")
     response = requests.post(
         AUTH_URL,
         data={
@@ -39,9 +40,9 @@ def refresh_access_token(refresh_token):
         }
     )
     if response.status_code == 200:
-        return response.json()["access_token"]
+        return response.json()
     else:
-        raise Exception("Failed to refresh access token:", response.status_code, response.text)
+        raise Exception("Failed to refresh tokens:", response.status_code, response.text)
 
 
 def get_mndwi(lat, lon, start_date, end_date, session):
@@ -144,25 +145,37 @@ def get_mndwi(lat, lon, start_date, end_date, session):
 
 
 def main():
-    username = input("Enter your email:")
-    password = getpass.getpass("Enter your password:")
+    username = "cristicristi532@gmail.com"
+    password = "Nak$4MpK#H8YShY"
     
     try:
         token_data = get_tokens(username, password)
         access_token = token_data["access_token"]
         refresh_token = token_data["refresh_token"]
-        
         session = requests.Session()
         session.headers.update({"Authorization": f"Bearer {access_token}"})
-        
     except Exception as e:
         print(f"Authentication failed: {e}")
         return
-
-    powerplant_locations = get_hydropower_locations()
     
-    results = []
+    powerplant_locations = get_hydropower_locations()
+    results_file = "../data/results/hydropower_mndwi.csv"
+    
+    try:
+        existing_df = pd.read_csv(results_file)
+        processed_names = set(existing_df['name'])
+        print(f"Found {len(processed_names)} existing records. They will be skipped.")
+    except (FileNotFoundError, pd.errors.EmptyDataError):
+        processed_names = set()
+        existing_df = pd.DataFrame(columns=['name', 'latitude', 'longitude', 'mndwi'])
+        print("No existing records found. Starting from scratch.")
+
+    new_results = []
+
     for _, row in powerplant_locations.iterrows():
+        if row["name"] in processed_names:
+            continue
+                
         print(f"Processing {row['name']} at ({row['latitude']}, {row['longitude']})")
 
         mndwi_val, status = get_mndwi(row['latitude'], row['longitude'],
@@ -171,23 +184,38 @@ def main():
 
         if status == 401:
             print("Access token expired. Refreshing...")
-            access_token = refresh_access_token(refresh_token)
-            session.headers.update({"Authorization": f"Bearer {access_token}"})
-            mndwi_val, status = get_mndwi(row['latitude'], row['longitude'],
-                                    start_date="2024-04-01", end_date="2024-09-30",
-                                    session=session)
+            try:
+                new_token_data = refresh_tokens(refresh_token)
+                access_token = new_token_data["access_token"]
+                refresh_token = new_token_data["refresh_token"]
+                print("Tokens refreshed successfully.")
+                session.headers.update({"Authorization": f"Bearer {access_token}"})
+                mndwi_val, status = get_mndwi(row['latitude'], row['longitude'],
+                                        start_date="2024-04-01", end_date="2024-09-30",
+                                        session=session)
+            except Exception as e:
+                print(f"Fatal error during token refresh: {e}")
+                print("Exiting script. Please re-authenticate.")
+                break
 
-        results.append({
-            "name": row['name'],
-            "latitude": row['latitude'],
-            "longitude": row['longitude'],
-            "mndwi": mndwi_val
-        })
-        mndwi_df = pd.DataFrame(results)
+        if status == 200 and mndwi_val is not None:
+            new_results.append({
+                "name": row['name'],
+                "latitude": row['latitude'],
+                "longitude": row['longitude'],
+                "mndwi": mndwi_val
+            })
+            processed_names.add(row['name'])
+        
+        time.sleep(1) 
 
-    print("\n--- Final Results ---")
-    print(mndwi_df)
-    mndwi_df.to_csv("../data/results/hydropower_mndwi.csv", index=False)
+    if new_results:
+        new_results_df = pd.DataFrame(new_results)
+        final_df = pd.concat([existing_df, new_results_df], ignore_index=True)
+        final_df.to_csv(results_file, index=False)
+        print(f"Successfully added {len(new_results)} new records.")
+
+    print("It Done")
     
 if __name__ == "__main__":
     main()
