@@ -185,6 +185,7 @@ def main():
         if status == 401:
             print("Access token expired. Refreshing...")
             try:
+                time.sleep(10)
                 new_token_data = refresh_tokens(refresh_token)
                 access_token = new_token_data["access_token"]
                 refresh_token = new_token_data["refresh_token"]
@@ -196,7 +197,8 @@ def main():
             except Exception as e:
                 print(f"Fatal error during token refresh: {e}")
                 print("Exiting script. Please re-authenticate.")
-                break
+            else:
+                main()
 
         if status == 200 and mndwi_val is not None:
             new_results.append({
@@ -207,13 +209,14 @@ def main():
             })
             processed_names.add(row['name'])
         
-        time.sleep(1) 
-
-    if new_results:
-        new_results_df = pd.DataFrame(new_results)
-        final_df = pd.concat([existing_df, new_results_df], ignore_index=True)
-        final_df.to_csv(results_file, index=False)
-        print(f"Successfully added {len(new_results)} new records.")
+        
+        if new_results:
+            new_results_df = pd.DataFrame(new_results)
+            final_df = pd.concat([existing_df, new_results_df], ignore_index=True)
+            final_df.to_csv(results_file, index=False)
+            print(f"Successfully added {len(new_results)} new records.")
+        
+        time.sleep(2) 
 
     print("It Done")
     
