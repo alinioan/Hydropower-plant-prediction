@@ -145,8 +145,8 @@ def get_ndbi(lat, lon, start_date, end_date, session):
 
 
 def main():
-    username = "cristicristi532@gmail.com"
-    password = "Nak$4MpK#H8YShY"
+    username = input("Email:")
+    password = getpass.getpass("Password:")
     
     try:
         token_data = get_tokens(username, password)
