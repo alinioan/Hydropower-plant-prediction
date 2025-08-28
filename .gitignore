@@ -2,6 +2,6 @@
 .lib/
 .vscode/
 __pycache__/
-HydroRIVERS_v10_eu.gdb/
+HydroRIVERS_v10_eu_shp/
 credentials
 clinet.txt

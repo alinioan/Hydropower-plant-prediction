@@ -1,60 +1,63 @@
-import os
 import json
+import pandas as pd
 import requests
-import getpass
 import numpy as np
 import rasterio
 import tempfile
-import pandas as pd
-from locations import get_hydropower_locations
-import time
 
-CLIENT_ID = "cdse-public"
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
+from locations import get_locations
+
 AUTH_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
-API_URL = "https://sh.dataspace.copernicus.eu/api/v1/process"
 
-def get_tokens(username, password):
-    print("Authenticating with Copernicus Data Space...")
-    response = requests.post(
-        AUTH_URL,
-        data={
-            "client_id": CLIENT_ID,
-            "username": username,
-            "password": password,
-            "grant_type": "password"
-        }
-    )
-    if response.status_code == 200:
-        return response.json()
-    else:
-        raise Exception("Failed to retrieve tokens:", response.status_code, response.text)
+with open("../client_info.json", "r") as f:
+    AUTH_DATA = json.load(f)
 
-def refresh_tokens(refresh_token):
-    print("Refreshing tokens...")
-    response = requests.post(
-        AUTH_URL,
-        data={
-            "client_id": CLIENT_ID,
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token
-        }
-    )
-    if response.status_code == 200:
-        return response.json()
-    else:
-        raise Exception("Failed to refresh tokens:", response.status_code, response.text)
+print("Authenticating with Copernicus Data Space...")
+print(f"AuthData: {AUTH_DATA}")
 
+token_response = requests.post(AUTH_URL, data=AUTH_DATA)
+print(f"Token response: {token_response.status_code} {token_response.text}")
+ACCESS_TOKEN = token_response.json()["access_token"]
 
-def get_ndbi(lat, lon, start_date, end_date, session):
-    buffer_deg = 0.0009
-    bbox = [lon - buffer_deg, lat - buffer_deg, lon + buffer_deg, lat + buffer_deg]
+HEADERS = {
+    "Authorization": f"Bearer {ACCESS_TOKEN}"
+}
+
+def refresh_token():
+    """
+    Refresh the access token using the refresh token
+    """
+    global ACCESS_TOKEN, HEADERS
     
+    token_response = requests.post(AUTH_URL, data=AUTH_DATA)
+    print(f"Token response: {token_response.status_code} {token_response.text}")
+    ACCESS_TOKEN = token_response.json()["access_token"]
+    HEADERS = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}"
+    }
+
+    if token_response.status_code == 200:
+        new_token = token_response.json()
+        ACCESS_TOKEN = new_token["access_token"]
+        HEADERS["Authorization"] = f"Bearer {ACCESS_TOKEN}"
+        print("Token refreshed successfully.")
+    else:
+        print(f"Failed to refresh token: {token_response.status_code} {token_response.text}")
+
+# NDBI extraction function (Processing API)
+def get_ndbi(lat, lon, start_date="2024-04-01", end_date="2024-09-30"):
+    # Create small bbox around the plant (~100m x 100m)
+    buffer_deg = 0.0009  # ~100 m at equator
+    bbox = [lon - buffer_deg, lat - buffer_deg, lon + buffer_deg, lat + buffer_deg]
+
     evalscript = """
     //VERSION=3
     function setup() {
       return {
         input: [{
-          bands: ["B11", "B08", "SCL"],
+          bands: ["B08", "B11", "SCL"],
           units: "DN"
         }],
         output: [
@@ -62,39 +65,55 @@ def get_ndbi(lat, lon, start_date, end_date, session):
             id: "ndbi",
             bands: 1,
             sampleType: "FLOAT32"
+          },
+          {
+            id: "dataMask", 
+            bands: 1
           }
         ],
         mosaicking: "ORBIT"
       };
     }
-
+    
     function evaluatePixel(samples) {
       var validSamples = [];
       
+      // Collect all valid samples across time
       for (var i = 0; i < samples.length; i++) {
         var sample = samples[i];
-        if ([3, 8, 9, 10, 11].includes(sample.SCL)) {
-            continue;
+        // SCL filtering: Exclude water (6) and invalid pixels
+        if (sample.SCL == 6 || sample.SCL == 3 || sample.SCL == 8 ||
+            sample.SCL == 9 || sample.SCL == 10 || sample.SCL == 11) {
+            continue; // Skip this sample, continue to next
         }
         
-        let ndbi = (sample.B11 - sample.B08) / (sample.B11 + sample.B08);
+        // Calculate NDBI using B11 (SWIR) and B08 (NIR)
+        var ndbi = (sample.B11 - sample.B08) / (sample.B11 + sample.B08);
         
+        // Filter out invalid NDBI values
         if (!isNaN(ndbi) && isFinite(ndbi)) {
           validSamples.push(ndbi);
         }
       }
       
       if (validSamples.length === 0) {
-        return { ndbi: [NaN] };
+        return {
+          ndbi: [NaN],
+          dataMask: [0]
+        };
       }
       
+      // Calculate temporal mean
       var sum = 0;
       for (var j = 0; j < validSamples.length; j++) {
         sum += validSamples[j];
       }
       var meanNdbi = sum / validSamples.length;
       
-      return { ndbi: [meanNdbi] };
+      return {
+        ndbi: [meanNdbi],
+        dataMask: [1]
+      };
     }
     """
 
@@ -113,6 +132,9 @@ def get_ndbi(lat, lon, start_date, end_date, session):
                     },
                     "maxCloudCoverPercentage": 10
                 },
+                "processing": {
+                    "atmosphericCorrection": "NONE"
+                }
             }]
         },
         "output": {
@@ -127,97 +149,90 @@ def get_ndbi(lat, lon, start_date, end_date, session):
         }
     }
 
-    resp = session.post(API_URL, json=payload)
+    resp = requests.post(
+        f"https://sh.dataspace.copernicus.eu/api/v1/process",
+        headers=HEADERS,
+        json=payload
+    )
 
-    if resp.status_code == 401:  
-        return None, 401
-    elif resp.status_code != 200:
+    if resp.status_code != 200:
         print(f"Error {resp.status_code}: {resp.text}")
-        return None, resp.status_code
+        if resp.status_code == 401 and "expired" in resp.text:
+            refresh_token()
+        return None
 
+    # Save TIFF to temp file and compute mean NDBI
     with tempfile.NamedTemporaryFile(suffix=".tiff") as tmpfile:
         tmpfile.write(resp.content)
         tmpfile.flush()
         with rasterio.open(tmpfile.name) as src:
-            arr = src.read(1).astype(np.float32)
+            arr = src.read(1)
+            arr = arr.astype(np.float32)
             arr[arr == src.nodata] = np.nan
-            return np.nanmean(arr), 200
+            return np.nanmean(arr)
 
+def process_location(row, inter_ndbi_df):
+    """Fetch NDBI for a single location (thread-safe worker)."""
+    if row['name'] in inter_ndbi_df['name'].values:
+        return {
+            "name": row['name'],
+            "latitude": row['latitude'],
+            "longitude": row['longitude'],
+            "ndbi": inter_ndbi_df.loc[
+                (inter_ndbi_df['longitude'] == row['longitude']) &
+                (inter_ndbi_df['latitude'] == row['latitude']),
+                'ndbi'
+            ].values[0]
+        }
+
+    ndbi_val = get_ndbi(row['latitude'], row['longitude'])
+    if ndbi_val is None:
+        ndbi_val = get_ndbi(row['latitude'], row['longitude'])
+
+    return {
+        "name": row['name'],
+        "latitude": row['latitude'],
+        "longitude": row['longitude'],
+        "ndbi": ndbi_val
+    }
 
 def main():
-    username = input("Email:")
-    password = getpass.getpass("Password:")
-    
+    locations = get_locations()
+
+    # Load intermediate results if available
     try:
-        token_data = get_tokens(username, password)
-        access_token = token_data["access_token"]
-        refresh_token = token_data["refresh_token"]
-        
-        session = requests.Session()
-        session.headers.update({"Authorization": f"Bearer {access_token}"})
-        
-    except Exception as e:
-        print(f"Authentication failed: {e}")
-        return
+        inter_ndbi_df = pd.read_csv("../data/intermediary/ndbi_intermediate.csv")
+        print("Loaded intermediate NDBI results.")
+    except FileNotFoundError:
+        inter_ndbi_df = pd.DataFrame(columns=["name", "latitude", "longitude", "ndbi"])
+        print("No intermediate NDBI results found. Starting fresh.")
 
-    powerplant_locations = get_hydropower_locations()
-    results_file = "../data/results/hydropower_ndbi.csv"
-    
-    try:
-        existing_df = pd.read_csv(results_file)
-        processed_names = set(existing_df['name'])
-        print(f"Found {len(processed_names)} existing records. They will be skipped.")
-    except (FileNotFoundError, pd.errors.EmptyDataError):
-        processed_names = set()
-        existing_df = pd.DataFrame(columns=['name', 'latitude', 'longitude', 'ndbi'])
-        print("No existing records found. Starting from scratch.")
+    results = []
+    max_workers = 8  # adjust depending on your API rate limits
 
-    new_results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(process_location, row, inter_ndbi_df): row['name']
+            for _, row in locations.iterrows()
+        }
 
-    for _, row in powerplant_locations.iterrows():
-        if row["name"] in processed_names:
-            continue
-                
-        print(f"Processing {row['name']} at ({row['latitude']}, {row['longitude']})")
-
-        ndbi_val, status = get_ndbi(row['latitude'], row['longitude'],
-                                start_date="2024-04-01", end_date="2024-09-30",
-                                session=session)
-
-        if status == 401:
-            print("Access token expired. Refreshing...")
+        # tqdm progress bar for completed futures
+        for i, future in enumerate(tqdm(as_completed(futures), total=len(futures), desc="Fetching NDBI")):
             try:
-                new_token_data = refresh_tokens(refresh_token)
-                access_token = new_token_data["access_token"]
-                refresh_token = new_token_data["refresh_token"]
-                print("Tokens refreshed successfully.")
-                session.headers.update({"Authorization": f"Bearer {access_token}"})
-                ndbi_val, status = get_ndbi(row['latitude'], row['longitude'],
-                                        start_date="2024-04-01", end_date="2024-09-30",
-                                        session=session)
+                res = future.result()
+                if res:
+                    results.append(res)
             except Exception as e:
-                print(f"Fatal error during token refresh: {e}")
-                print("Exiting script. Please re-authenticate.")
-                break
+                print(f"Error processing {futures[future]}: {e}")
 
-        if status == 200 and ndbi_val is not None:
-            new_results.append({
-                "name": row['name'],
-                "latitude": row['latitude'],
-                "longitude": row['longitude'],
-                "ndbi": ndbi_val
-            })
-            processed_names.add(row['name'])
-        
-        time.sleep(1) 
+            # Save progress every 75 results
+            if (i + 1) % 75 == 0:
+                inter_ndbi_df = pd.DataFrame(results)
+                inter_ndbi_df.to_csv("../data/intermediary/ndbi_intermediate.csv", index=False)
 
-    if new_results:
-        new_results_df = pd.DataFrame(new_results)
-        final_df = pd.concat([existing_df, new_results_df], ignore_index=True)
-        final_df.to_csv(results_file, index=False)
-        print(f"Successfully added {len(new_results)} new records.")
+    ndbi_df = pd.DataFrame(results)
+    print(ndbi_df)
+    ndbi_df.to_csv("../data/results/hydropower_ndbi.csv", index=False)
 
-    print("It Done")
-    
 if __name__ == "__main__":
     main()

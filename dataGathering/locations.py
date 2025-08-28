@@ -31,7 +31,7 @@ def get_random_river_locations(sample_size=5000, random_state=42):
     """
     Generates random locations alongside rivers, outside hydropower plant exclusion zones.
     """
-    rivers = gpd.read_file("data/HydroRIVERS_v10_eu_shp/HydroRIVERS_v10_eu.shp")  # HydroSHEDS Europe shapefile
+    rivers = gpd.read_file("../data/HydroRIVERS_v10_eu_shp/HydroRIVERS_v10_eu.shp")  # HydroSHEDS Europe shapefile
     
     # Filter rivers by discharge
     filtered_rivers = rivers[(rivers["DIS_AV_CMS"] <= 10) & (rivers["DIS_AV_CMS"] >= 1.2)]
@@ -60,8 +60,8 @@ def get_random_river_locations(sample_size=5000, random_state=42):
 
     sampled_rivers = rivers_far.sample(n=sample_size, random_state=random_state)
 
-    # uncomment the next line to save the sampled rivers to a shapefile
-    # sampled_rivers.to_file("out/random_negative_rivers.shp")
+    # uncomment the next line o save the sampled rivers to a shapefile 
+    # sampled_rivers.to_file("data/random_negative_rivers.shp")
 
     sampled_rivers["first_coord"] = sampled_rivers.geometry.apply(
         lambda geom: list(geom.coords)[0] if geom.geom_type == "LineString" 
