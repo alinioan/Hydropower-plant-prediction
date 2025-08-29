@@ -1,14 +1,17 @@
-import tempfile
-import pandas as pd
-from rasterio.transform import from_bounds
-import numpy as np
-import rasterio
 import requests
 import json
-import matplotlib.pyplot as plt
+import tempfile
+import pandas as pd
+import geopandas as gpd
+import numpy as np
+import rasterio
+from rasterio.transform import from_bounds
+import numpy as np
 from tqdm import tqdm
 from dataGathering.locations import get_locations
 
+
+BUFFER_DEG = 0.0025 # ~250m buffer
 AUTH_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
 
 with open("client_info.json", "r") as f:
@@ -46,8 +49,7 @@ def refresh_token():
 
 
 def get_indices_patch(lat, lon, start_date="2024-04-01", end_date="2024-10-01"):
-    buffer_deg = 0.0045  # ~500m buffer
-    bbox = [lon - buffer_deg, lat - buffer_deg, lon + buffer_deg, lat + buffer_deg]
+    bbox = [lon - BUFFER_DEG, lat - BUFFER_DEG, lon + BUFFER_DEG, lat + BUFFER_DEG]
 
     evalscript = """
         //VERSION=3
@@ -147,8 +149,7 @@ def get_indices_patch(lat, lon, start_date="2024-04-01", end_date="2024-10-01"):
 
 
 def get_dem_slope_patch(lat, lon, width=50, height=50):
-    buffer_deg = 0.0045
-    bbox = [lon-buffer_deg, lat-buffer_deg, lon+buffer_deg, lat+buffer_deg]
+    bbox = [lon-BUFFER_DEG, lat-BUFFER_DEG, lon+BUFFER_DEG, lat+BUFFER_DEG]
 
     payload = {
         "evalscript":"//VERSION=3\nfunction setup(){return {input:[{bands:['DEM']}],output:{bands:1,sampleType:'FLOAT32'}}} function evaluatePixel(s){return [s.DEM]}",
@@ -172,20 +173,6 @@ def get_dem_slope_patch(lat, lon, width=50, height=50):
             dy, dx = np.gradient(dem, 30)  # assuming 30m pixel size
             slope = np.degrees(np.arctan(np.sqrt(dx**2 + dy**2)))
             return dem, slope  # both shape = (H, W)
-
-def visualize_feature_cube(filename):
-    with rasterio.open(filename) as src:
-        # Read all bands
-        data = src.read()  # shape = (bands, height, width)
-        band_names = ["NDVI", "NDWI", "NDBI", "MNDWI", "DEM", "Slope", "Label"]
-        
-        # Plot each band
-        for i in range(data.shape[0]):
-            plt.figure(figsize=(5,5))
-            plt.title(f"{band_names[i]} - {filename}")
-            plt.imshow(data[i], cmap='viridis' if i!=6 else 'gray')
-            plt.colorbar()
-            plt.show()
 
 def save_feature_cube(filename, feature_cube, bbox, width=50, height=50, crs="EPSG:4326"):
     """
@@ -212,10 +199,34 @@ def save_feature_cube(filename, feature_cube, bbox, width=50, height=50, crs="EP
         dst.write(bands_first)
     print(f"Saved feature cube to {filename}")
 
+def create_label_mask(row, height=50, width=50):
+    """
+    Create a full patch label mask:
+    1 = good location (power plant)
+    0 = bad location (random location)
+    """
+    if pd.notna(row['name']) and row['name'] != '':
+        # Positive patch
+        label_value = 1
+    else:
+        # Negative patch
+        label_value = 0
+
+    # Full patch mask
+    label_mask = np.full((height, width), label_value, dtype=np.uint8)
+    return label_mask
+
 def main():
     locations = get_locations().head(5)
 
-    for _, row in tqdm(locations.iterrows(), total=len(locations), desc="Fetching patches"):
+    discharge_df = pd.read_csv("data/results/average_discharge.csv")
+    precipitation_df = pd.read_csv("data/results/hydropower_precipitation.csv")
+
+    for df in [locations, discharge_df, precipitation_df]:
+        df["latitude"] = df["latitude"].round(6)
+        df["longitude"] = df["longitude"].round(6)
+
+    for idx, row in tqdm(locations.iterrows(), total=len(locations), desc="Fetching patches"):
         lat = row['latitude']
         lon = row['longitude']
         indices = get_indices_patch(lat, lon)
@@ -224,17 +235,42 @@ def main():
         # final array: (H, W, C=6)
         feature_cube = np.stack([indices[0], indices[1], indices[2], indices[3], dem, slope], axis=-1)
 
-        # Create label mask: 1 if power plant (row['name'] not empty), 0 if random location
-        label_value = 1 if pd.notna(row['name']) and row['name'] != '' else 0
-        label_mask = np.full(feature_cube.shape[:2], label_value, dtype=np.uint8)
+        discharge_df_mask = (
+            (discharge_df['longitude'] == row['longitude']) &
+            (discharge_df['latitude'] == row['latitude'])
+        )
+        precipitation_df_mask = (
+            (precipitation_df['longitude'] == row['longitude']) &
+            (precipitation_df['latitude'] == row['latitude'])
+        )
+        
+        if discharge_df_mask.any():
+            discharge_val = discharge_df[discharge_df_mask]['discharge'].values[0]
+        else:
+            discharge_val = np.nan
 
-        # Append label as the last channel
-        feature_cube_with_label = np.concatenate([feature_cube, label_mask[:, :, np.newaxis]], axis=-1)
+        if precipitation_df_mask.any():
+            precipitation_val = precipitation_df[precipitation_df_mask]['precipitation'].values[0]
+        else:
+            precipitation_val = np.nan
 
+        # Create constant masks for discharge and precipitation
+        discharge_mask = np.full(feature_cube.shape[:2], discharge_val, dtype=np.float32)
+        precipitation_mask = np.full(feature_cube.shape[:2], precipitation_val, dtype=np.float32)
+        label_mask = create_label_mask(row)
+        
+        # Append the masks and the label as the last channel
+        final_feature_cube = np.concatenate([feature_cube,
+                                             discharge_mask[:, :, np.newaxis],
+                                             precipitation_mask[:, :, np.newaxis],
+                                             label_mask[:, :, np.newaxis]], axis=-1)
+
+        
+        bbox = [lon - BUFFER_DEG, lat - BUFFER_DEG, lon + BUFFER_DEG, lat + BUFFER_DEG]
         save_feature_cube(
-            filename=f"data/feature_cubes/feature_cube_{lat:.6f}_{lon:.6f}.tif",
-            feature_cube=feature_cube_with_label,
-            bbox=[lon - 0.0045, lat - 0.0045, lon + 0.0045, lat + 0.0045]
+            filename=f"data/feature_cubes/feature_cube_{idx}.tif",
+            feature_cube=final_feature_cube,
+            bbox=bbox
         )
 
 
