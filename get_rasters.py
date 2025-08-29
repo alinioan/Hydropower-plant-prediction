@@ -1,3 +1,4 @@
+import os
 import requests
 import json
 import tempfile
@@ -9,7 +10,7 @@ from rasterio.transform import from_bounds
 import numpy as np
 from tqdm import tqdm
 from dataGathering.locations import get_locations
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BUFFER_DEG = 0.0025 # ~250m buffer
 AUTH_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
@@ -216,8 +217,62 @@ def create_label_mask(row, height=50, width=50):
     label_mask = np.full((height, width), label_value, dtype=np.uint8)
     return label_mask
 
+def process_location(idx, row, discharge_df, precipitation_df):
+    # check if file already exists
+    filename = f"data/feature_cubes/feature_cube_{idx}.tif"
+    if os.path.exists(filename):
+        print(f"File {filename} already exists. Skipping...")
+        return
+    lat = row['latitude']
+    lon = row['longitude']
+
+    indices = get_indices_patch(lat, lon)
+    if indices is None:
+        print(f"Retrying location {idx} at {lat}, {lon} due to error.")
+        indices = get_indices_patch(lat, lon)
+        if indices is None:
+            print(f"Skipping location {idx} at {lat}, {lon} due to repeated errors.")
+            return
+
+    dem_slope = get_dem_slope_patch(lat, lon)
+    if dem_slope is None:
+        print(f"Retrying DEM/Slope for location {idx} at {lat}, {lon} due to error.")
+        dem_slope = get_dem_slope_patch(lat, lon)
+        if dem_slope is None:
+            print(f"Skipping location {idx} at {lat}, {lon} due to repeated errors.")
+            return
+    dem, slope = dem_slope
+
+    feature_cube = np.stack([indices[0], indices[1], indices[2], indices[3], dem, slope], axis=-1)
+
+    # Discharge & precipitation
+    discharge_mask = np.full(
+        feature_cube.shape[:2],
+        discharge_df.loc[(discharge_df['latitude'] == lat) & (discharge_df['longitude'] == lon), 'discharge'].values[0]
+        if ((discharge_df['latitude'] == lat) & (discharge_df['longitude'] == lon)).any() else np.nan,
+        dtype=np.float32
+    )
+
+    precipitation_mask = np.full(
+        feature_cube.shape[:2],
+        precipitation_df.loc[(precipitation_df['latitude'] == lat) & (precipitation_df['longitude'] == lon), 'precipitation'].values[0]
+        if ((precipitation_df['latitude'] == lat) & (precipitation_df['longitude'] == lon)).any() else np.nan,
+        dtype=np.float32
+    )
+
+    label_mask = create_label_mask(row)
+
+    final_feature_cube = np.concatenate([feature_cube,
+                                         discharge_mask[:, :, np.newaxis],
+                                         precipitation_mask[:, :, np.newaxis],
+                                         label_mask[:, :, np.newaxis]], axis=-1)
+
+    bbox = [lon - BUFFER_DEG, lat - BUFFER_DEG, lon + BUFFER_DEG, lat + BUFFER_DEG]
+    filename = f"data/feature_cubes/feature_cube_{idx}.tif"
+    save_feature_cube(filename, final_feature_cube, bbox)
+
 def main():
-    locations = get_locations().head(5)
+    locations = get_locations()
 
     discharge_df = pd.read_csv("data/results/average_discharge.csv")
     precipitation_df = pd.read_csv("data/results/hydropower_precipitation.csv")
@@ -226,52 +281,17 @@ def main():
         df["latitude"] = df["latitude"].round(6)
         df["longitude"] = df["longitude"].round(6)
 
-    for idx, row in tqdm(locations.iterrows(), total=len(locations), desc="Fetching patches"):
-        lat = row['latitude']
-        lon = row['longitude']
-        indices = get_indices_patch(lat, lon)
-        dem, slope = get_dem_slope_patch(lat, lon)
+    # Use ThreadPoolExecutor for parallel processing
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        futures = {executor.submit(process_location, idx, row, discharge_df, precipitation_df): idx
+                   for idx, row in locations.iterrows()}
 
-        # final array: (H, W, C=6)
-        feature_cube = np.stack([indices[0], indices[1], indices[2], indices[3], dem, slope], axis=-1)
-
-        discharge_df_mask = (
-            (discharge_df['longitude'] == row['longitude']) &
-            (discharge_df['latitude'] == row['latitude'])
-        )
-        precipitation_df_mask = (
-            (precipitation_df['longitude'] == row['longitude']) &
-            (precipitation_df['latitude'] == row['latitude'])
-        )
-        
-        if discharge_df_mask.any():
-            discharge_val = discharge_df[discharge_df_mask]['discharge'].values[0]
-        else:
-            discharge_val = np.nan
-
-        if precipitation_df_mask.any():
-            precipitation_val = precipitation_df[precipitation_df_mask]['precipitation'].values[0]
-        else:
-            precipitation_val = np.nan
-
-        # Create constant masks for discharge and precipitation
-        discharge_mask = np.full(feature_cube.shape[:2], discharge_val, dtype=np.float32)
-        precipitation_mask = np.full(feature_cube.shape[:2], precipitation_val, dtype=np.float32)
-        label_mask = create_label_mask(row)
-        
-        # Append the masks and the label as the last channel
-        final_feature_cube = np.concatenate([feature_cube,
-                                             discharge_mask[:, :, np.newaxis],
-                                             precipitation_mask[:, :, np.newaxis],
-                                             label_mask[:, :, np.newaxis]], axis=-1)
-
-        
-        bbox = [lon - BUFFER_DEG, lat - BUFFER_DEG, lon + BUFFER_DEG, lat + BUFFER_DEG]
-        save_feature_cube(
-            filename=f"data/feature_cubes/feature_cube_{idx}.tif",
-            feature_cube=final_feature_cube,
-            bbox=bbox
-        )
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Fetching patches in parallel"):
+            try:
+                future.result()
+            except Exception as e:
+                idx = futures[future]
+                print(f"Error processing location {idx}: {e}")
 
 
 if __name__ == "__main__":
