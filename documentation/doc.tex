@@ -1,0 +1,194 @@
+\documentclass[12pt,a4paper]{article}
+
+% --------------------------------------------------
+% Packages
+% --------------------------------------------------
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{margin=1in}
+
+% Code style
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!10},
+  keywordstyle=\color{blue},
+  commentstyle=\color{green!50!black},
+  stringstyle=\color{orange}
+}
+
+% -----------------------------------------------------------------------------
+% Title
+% -----------------------------------------------------------------------------
+\title{Hydropower Site Suitability}
+\author{Alin-Ioan Alexandru \\
+        Stefan-Cristian Grecu \\}
+\date{\today}
+
+% -----------------------------------------------------------------------------
+% Document
+% -----------------------------------------------------------------------------
+\begin{document}
+\maketitle
+
+\tableofcontents
+\newpage
+
+% -----------------------------------------------------------------------------
+\section{Introduction}
+
+This document describes the methodology, data processing pipeline, model
+training, and evaluation for the project focused on predicting site suitability
+for new hydropower plants using satellite imagery and deep learning segmentation
+models.
+\\
+\\
+The objective is to identify optimal locations for new hydropower plants by
+analyzing a variety of environmental factors using supervised learning. While
+there is limited available research that directly uses machine learning models
+in the analysis of site suitability for hydropower sites, our method, with the
+use of satellite imagery, has the advantage that it can potentially uncovere
+suitable locations that may not be considered by typical manual or rule-based
+analyses.
+\\
+\\
+We decided to use two approaches, resulting in two ML pipelines. The two
+pipelines start the same by making requests to the Sentinel Hub API to acquire
+the satellite data. The first approach models the gathered data in a tabular
+format and uses traditional ML algorithms (Random Forest, XGBoost) to make
+predictions. The second approach models the data as images with multiple
+channels and uses a deep learning segmentation model (U-Net) to make predictions.
+
+% -----------------------------------------------------------------------------
+\section{Data Sources and Gathering}
+
+The resulting dataset consists of about 3000 positive samples consisting of
+locations of hydropower plants from Europe and 5000 negative samples of random
+locations from European rivers.
+
+\subsection{Satellite Data}
+
+Using the Sentinel Hub API, we gather Sentinel-2 satellite imagery for the
+regions of interest. We focus on bands B3, B4, B8 and B11, which cover the
+visible and near-infrared spectrum.
+\\
+\\
+The following spectral indices are calculated:
+\begin{itemize}
+  \item NDVI (Normalized Difference Vegetation Index) - used to assess
+  vegetation health and density. Vegetation cover can be used to assess land
+  suitability for hydropower plants.
+  \item NDWI (Normalized Difference Water Index) - used to identify water
+  bodies and assess their extent. Water detection is important in identifying
+  potential sites for hydropower plants.
+  \item NDBI (Normalized Difference Built-up Index) - used to detect built-up
+  areas and urbanization. This helps in avoiding locations that are too close
+  to urban areas.
+  \item MNDWI (Modified Normalized Difference Water Index) - used to enhance
+  water features in urban areas.
+\end{itemize}
+
+\subsection{Topographic Data}
+
+Topographic data is obtained from the Copernicus Digital Elevation Model (DEM).
+The DEM provides elevation data which is crucial for assessing the potential
+energy generation capacity of a site and the potential of forming and
+accumulation lakes near the plants. From the DEM, we also derive slope data,
+which helps in understanding the terrain and its suitability for hydropower
+infrastructure.
+
+\subsection{Hydrological and Precipitation Data}
+
+Hydrological data, specifically river discharge data, is obtained from the
+Hydrorives database and precipitation data is gathered using the Open-Meteo
+API. River discharge is a key factor in determining the potential energy
+output of a hydropower plant, while precipitation data helps in understanding
+the water availability in the region.
+
+\subsection{Labels}
+Positive samples: near existing hydropower plants. \\
+Negative samples: random locations at least 30 kilometers away from any
+hydropower plant. \\
+Mask values (for the segmentation) and the classes used are as following:\\
+\texttt{1 = suitable}, \texttt{0 = unsuitable}.
+
+% -----------------------------------------------------------------------------
+\section{Data Preprocessing}
+
+\subsection{Preprocessing for Tabular Data}
+Preprocessing steps:
+\begin{itemize}
+  \item Splitting data: Performed train-test split (e.g., 80-20).
+  \item Handling missing values: Imputed missing values using mean strategy.
+  \item Outlier detection: Identified and treated outliers using IQR method and
+  replaced them using the same imputation strategy as for the missing values.
+  \item Normalization: Scaled features to a standard range.
+\end{itemize}
+
+\subsection{Preprocessing for Image Data}
+Feature cube construction: shape $(H, W, C)$ with channels for spectral indices,
+DEM, slope, discharge, precipitation.
+
+% -----------------------------------------------------------------------------
+\section{Machine Learning Models}
+
+\subsection{Tabular Data Models}
+
+For the tabular representation of the dataset, we trained and compared three
+widely used ensemble learning algorithms:
+
+\begin{itemize}
+  \item \textbf{Random Forest}: An ensemble of decision trees using bootstrap
+  sampling and feature bagging. It provides robust performance, reduces
+  overfitting, and allows for feature importance ranking.
+  \item \textbf{MLP (Multi-Layer Perceptron)}: A feedforward neural network with
+  multiple layers and non-linear activation functions. It can model complex
+  relationships in the data and is suitable for tabular data.
+  \item \textbf{XGBoost}: An optimized implementation of gradient boosting
+  decision trees. It generally provides higher accuracy, faster convergence,
+  and better handling of imbalanced data.
+\end{itemize}
+
+\subsection{Segmentation Model}
+
+For the image-based approach, we used a \textbf{U-Net} architecture implemented
+via the Segmentation Models PyTorch (SMP) library. The encoder was initialized
+with weights pre-trained on ImageNet to accelerate convergence.
+
+\begin{itemize}
+  \item \textbf{Input}: Multi-channel feature cubes composed of spectral
+  indices, DEM, slope, discharge, and precipitation layers.
+  \item \textbf{Loss function}: Combination of Cross-Entropy Loss and Dice Loss
+  to balance pixel-wise classification and overlap quality.
+  \item \textbf{Optimizer}: Adam optimizer with an initial learning rate of
+  $1 \times 10^{-3}$ and learning rate scheduling.
+  \item \textbf{Training}: Conducted for 20--30 epochs with a batch size of 16.
+\end{itemize}
+
+The model outputs a binary mask where each pixel is classified as either
+suitable or unsuitable for hydropower site placement.
+
+% -----------------------------------------------------------------------------
+\section{Evaluation and Results}
+
+\subsection{Tabular Data Models}
+
+\subsection{segmentation Model}
+
+% -----------------------------------------------------------------------------
+\section{Conclusion}
+
+% -----------------------------------------------------------------------------
+
+\end{document}

@@ -1,3 +1,4 @@
+out/
 .venv/
 .lib/
 .vscode/
@@ -5,3 +6,22 @@ __pycache__/
 HydroRIVERS_v10_eu_shp/
 credentials
 clinet.txt
+.other
+/data/intermediary/
+data/feature_cubes*
+
+## Core latex/pdflatex auxiliary files:
+*.aux
+*.lof
+*.log
+*.lot
+*.fls
+*.out
+*.toc
+*.fmt
+*.fot
+*.cb
+*.cb2
+.*.lb
+*.fdb_latexmk
+*.synctex.gz
