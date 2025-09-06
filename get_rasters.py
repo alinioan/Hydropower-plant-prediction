@@ -110,7 +110,8 @@ def get_indices_patch(lat, lon, start_date="2024-04-01", end_date="2024-10-01"):
             return [
                 mean(ndvi_vals),
                 mean(ndwi_vals),
-                mean(ndbi_vals)
+                mean(ndbi_vals),
+                mean(mndwi_vals)
             ];
         }
     """
@@ -162,7 +163,7 @@ def get_dem_slope_patch(lat, lon, width=50, height=50):
     if resp.status_code != 200:
         print(resp.status_code, resp.text)
         refresh_token()
-        return None
+        return None, None
 
     with tempfile.NamedTemporaryFile(suffix=".tiff") as tmpfile:
         tmpfile.write(resp.content)
@@ -217,9 +218,9 @@ def create_label_mask(row, height=50, width=50):
     label_mask = np.full((height, width), label_value, dtype=np.uint8)
     return label_mask
 
-def process_location(idx, row, discharge_df, precipitation_df):
+def process_location(idx, row, discharge_df, precipitation_df, save_folder):
     # check if file already exists
-    filename = f"data/feature_cubes/feature_cube_{idx}.tif"
+    filename = f"{save_folder}/feature_cube_{idx}.tif"
     if os.path.exists(filename):
         print(f"File {filename} already exists. Skipping...")
         return
@@ -268,12 +269,9 @@ def process_location(idx, row, discharge_df, precipitation_df):
                                          label_mask[:, :, np.newaxis]], axis=-1)
 
     bbox = [lon - BUFFER_DEG, lat - BUFFER_DEG, lon + BUFFER_DEG, lat + BUFFER_DEG]
-    filename = f"data/feature_cubes/feature_cube_{idx}.tif"
     save_feature_cube(filename, final_feature_cube, bbox)
 
-def main():
-    locations = get_locations()
-
+def extract_data(locations, save_folder):
     discharge_df = pd.read_csv("data/results/average_discharge.csv")
     precipitation_df = pd.read_csv("data/results/hydropower_precipitation.csv")
 
@@ -282,8 +280,8 @@ def main():
         df["longitude"] = df["longitude"].round(6)
 
     # Use ThreadPoolExecutor for parallel processing
-    with ThreadPoolExecutor(max_workers=20) as executor:
-        futures = {executor.submit(process_location, idx, row, discharge_df, precipitation_df): idx
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = {executor.submit(process_location, idx, row, discharge_df, precipitation_df, save_folder): idx
                    for idx, row in locations.iterrows()}
 
         for future in tqdm(as_completed(futures), total=len(futures), desc="Fetching patches in parallel"):
@@ -293,6 +291,12 @@ def main():
                 idx = futures[future]
                 print(f"Error processing location {idx}: {e}")
 
+def main():
+    locations = get_locations()
+    # locations = pd.DataFrame([{"latitude": 44.774444, "longitude": 24.273611, "name": ""}])
+    # locations = pd.DataFrame([{"latitude": 44.69944, "longitude": 23.83333, "name": ""}])
+    save_folder = "data/"
+    extract_data(locations, save_folder)
 
 if __name__ == "__main__":
     main()
