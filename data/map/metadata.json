@@ -1,20 +1,20 @@
 {
   "bbox": [
-    23.233611,
-    44.647778,
-    23.438889,
-    44.889444
+    24.22,
+    44.95,
+    25.1,
+    45.31
   ],
   "grid_shape": [
-    49,
-    42
+    72,
+    177
   ],
   "class_names": [
     "Hydro Potential",
     "No Hydro"
   ],
-  "total_cells": 2058,
-  "classified_cells": 2058,
+  "total_cells": 12744,
+  "classified_cells": 12744,
   "model_path": "cnn_hydro.pth",
   "model_name": "resnet34"
 }

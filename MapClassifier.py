@@ -507,6 +507,12 @@ class MapClassifier:
             
             # Choose color based on prediction
             color = colors[prediction % len(colors)]
+            if prediction == 0 and confidence < 0.7:
+                color = 'lightblue'
+            if prediction == 0 and confidence >= 0.7 and confidence < 0.9:
+                color = 'blue'
+            if prediction == 0 and confidence >= 0.9:
+                color = 'darkblue'
             
             # Create popup text
             popup_text = f"""
@@ -524,7 +530,7 @@ class MapClassifier:
                 color=color,
                 weight=0.1,
                 fillColor=color,
-                fillOpacity=max(0.2, confidence * 0.4),  # Opacity based on confidence
+                fillOpacity=max(0.2, 0.4),
                 popup=folium.Popup(popup_text, max_width=300),
                 tooltip=f"Class: {self.class_names[prediction]} (conf: {confidence:.2f})"
             ).add_to(m)
@@ -539,9 +545,12 @@ class MapClassifier:
         <h4>Classification Legend</h4>
         '''
         
-        for i, class_name in enumerate(self.class_names):
-            color = colors[i % len(colors)]
-            legend_html += f'<p><i class="fa fa-square" style="color:{color}"></i> {class_name}</p>'
+        # for i, class_name in enumerate(self.class_names):
+        #     color = colors[i % len(colors)]
+        legend_html += f'<p><i class="fa fa-square" style="color:lightblue"></i> Hydro Potential (<70% confidence)</p>'
+        legend_html += f'<p><i class="fa fa-square" style="color:blue"></i> Hydro Potential (70% - 90% confidence)</p>'
+        legend_html += f'<p><i class="fa fa-square" style="color:darkblue"></i> Hydro Potential (>90% confidence)</p>'
+        legend_html += f'<p><i class="fa fa-square" style="color:grey"></i> No Hydro</p>'
         
         legend_html += '</div>'
         m.get_root().html.add_child(folium.Element(legend_html))
@@ -643,3 +652,20 @@ def classify_map_area(bbox, model_path, model_name='resnet34', class_names=None,
     print("=" * 60)
     
     return predictions_2d, confidences_2d, results_summary
+
+
+# bbox = [24.22, 44.95, 25.10, 45.31]  # [min_lon, min_lat, max_lon, max_lat]
+# model_path = "cnn_hydro.pth"
+# class_names = ['Hydro Potential', 'No Hydro']
+
+# predictions, confidences, summary = classify_map_area(
+#     bbox=bbox,
+#     model_path=model_path,
+#     model_name='resnet34',
+#     class_names=class_names,
+#     output_folder='data/map',
+# )
+
+# print("Classification Summary:")
+# for key, value in summary.items():
+#     print(f"  {key}: {value}")
