@@ -6,6 +6,7 @@
 \usepackage[utf8]{inputenc}
 \usepackage{graphicx}
 \usepackage{amsmath}
+\usepackage{amssymb}
 \usepackage{hyperref}
 \usepackage{geometry}
 \usepackage{booktabs}
@@ -68,7 +69,7 @@ pipelines start the same by making requests to the Sentinel Hub API to acquire
 the satellite data. The first approach models the gathered data in a tabular
 format and uses traditional ML algorithms (Random Forest, XGBoost) to make
 predictions. The second approach models the data as images with multiple
-channels and uses a deep learning segmentation model (U-Net) to make predictions.
+channels and uses a CNN based on resnet to classify the images.
 
 % -----------------------------------------------------------------------------
 \section{Data Sources and Gathering}
@@ -96,7 +97,7 @@ The following spectral indices are calculated:
   areas and urbanization. This helps in avoiding locations that are too close
   to urban areas.
   \item MNDWI (Modified Normalized Difference Water Index) - used to enhance
-  water features in urban areas.
+  and detect water features.
 \end{itemize}
 
 \subsection{Topographic Data}
@@ -119,9 +120,7 @@ the water availability in the region.
 \subsection{Labels}
 Positive samples: near existing hydropower plants. \\
 Negative samples: random locations at least 30 kilometers away from any
-hydropower plant. \\
-Mask values (for the segmentation) and the classes used are as following:\\
-\texttt{1 = suitable}, \texttt{0 = unsuitable}.
+hydropower plant.
 
 % -----------------------------------------------------------------------------
 \section{Data Preprocessing}
@@ -136,9 +135,62 @@ Preprocessing steps:
   \item Normalization: Scaled features to a standard range.
 \end{itemize}
 
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{images/boxplot_before.png}
+    \caption{Boxplot before preprocessing}
+    \label{fig:boxplot-before}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{images/boxplot_after.png}
+    \caption{Boxplot after preprocessing}
+    \label{fig:boxplot-after}
+  \end{subfigure}
+  \caption{Comparison of feature distributions before and after preprocessing.}
+  \label{fig:boxplot-comparison}
+\end{figure}
+
 \subsection{Preprocessing for Image Data}
 Feature cube construction: shape $(H, W, C)$ with channels for spectral indices,
 DEM, slope, discharge, precipitation.
+The 8-channel feature cubes consist of the following spectral indices and
+geophysical parameters:
+
+\begin{enumerate}
+    \item NDVI (Normalized Difference Vegetation Index)
+    \item NDWI (Normalized Difference Water Index)
+    \item NDBI (Normalized Difference Built-up Index)
+    \item MNDWI (Modified Normalized Difference Water Index)
+    \item DEM (Digital Elevation Model)
+    \item Slope
+    \item Discharge
+    \item Precipitation
+\end{enumerate}
+
+When creating the Dataset for training the custom weights were assigned to
+the channels of the image to better reflect the importance of the feature
+represented by the channel. 
+
+\begin{table}[H]
+  \centering
+  \caption{Channel Weights Used for Image Feature Cubes}
+  \begin{tabular}{lcccccccc}
+    \toprule
+    Channel & NDVI & NDWI & NDBI & MNDWI & DEM & Slope & Discharge & Precipitation \\
+    \midrule
+    Weight  & 0.8  & 1.8  & 0.6  & 2.0   & 1.5 & 2.2   & 2.4       & 1.0 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The data set was then slipt into 3 datasets:
+\begin{itemize}
+    \item Train - 70\% of the data.
+    \item Validation - 20\% of the data.
+    \item Test - 10\% of the data.
+\end{itemize}
 
 % -----------------------------------------------------------------------------
 \section{Machine Learning Models}
@@ -160,34 +212,273 @@ widely used ensemble learning algorithms:
   and better handling of imbalanced data.
 \end{itemize}
 
-\subsection{Segmentation Model}
+\subsection{CNN Classification Model}
 
-For the image-based approach, we used a \textbf{U-Net} architecture implemented
-via the Segmentation Models PyTorch (SMP) library. The encoder was initialized
-with weights pre-trained on ImageNet to accelerate convergence.
+The CNN model is based on the pre-trained ResNet-34 architecture, modified to
+handle the 8-channel input feature cubes. The key modifications brought to the
+model include:
 
 \begin{itemize}
-  \item \textbf{Input}: Multi-channel feature cubes composed of spectral
-  indices, DEM, slope, discharge, and precipitation layers.
-  \item \textbf{Loss function}: Combination of Cross-Entropy Loss and Dice Loss
-  to balance pixel-wise classification and overlap quality.
-  \item \textbf{Optimizer}: Adam optimizer with an initial learning rate of
-  $1 \times 10^{-3}$ and learning rate scheduling.
-  \item \textbf{Training}: Conducted for 20--30 epochs with a batch size of 16.
+    \item \textbf{Input Layer Modification}: The first convolutional layer
+    (\texttt{conv1}) was modified from the standard 3-channel RGB input to
+    accept 8-channel input:
+    \begin{equation}
+        \text{conv1}: \mathbb{R}^{8 \times H \times W}
+                      \rightarrow \mathbb{R}^{64 \times H' \times W'}
+    \end{equation}
+    with kernel size 7x7, stride 2, and padding 3.
+    
+    \item \textbf{Feature Extraction}: The backbone ResNet-34 layers
+    (conv2\_x through conv5\_x) remain unchanged, providing hierarchical
+    feature extraction with skip connections.
+    
+    \item \textbf{Classification Head}: The final fully connected layer was
+    modified for binary classification:
+    \begin{equation}
+        \text{fc}: \mathbb{R}^{512} \rightarrow \mathbb{R}^{2}
+    \end{equation}
 \end{itemize}
-
-The model outputs a binary mask where each pixel is classified as either
-suitable or unsuitable for hydropower site placement.
 
 % -----------------------------------------------------------------------------
 \section{Evaluation and Results}
 
 \subsection{Tabular Data Models}
 
-\subsection{segmentation Model}
+\subsubsection{Random Forest}
 
+  Hyperparamters used for Random Forest:
+  \begin{itemize}
+    \item \texttt{n\_estimators}: 100
+    \item \texttt{max\_depth}: 30
+    \item \texttt{min\_samples\_leaf}: 2
+    \item \texttt{criterion}: 'entropy'
+    \item \texttt{class\_weight}: 'balanced'
+    \item \texttt{max\_samples}: 0.8
+    \item \texttt{max\_features}: 0.5
+    \item \texttt{random\_state}: 42
+    \item \texttt{n\_jobs}: -1
+  \end{itemize}
+
+\begin{table}[H]
+  \centering
+  \caption{Random Forest Classification Report}
+  \begin{tabular}{lcccc}
+    \toprule
+    Class & Precision & Recall & F1-score & Support \\
+    \midrule
+    0 (Unsuitable) & 0.90 & 0.93 & 0.92 & 981 \\
+    1 (Suitable)   & 0.88 & 0.83 & 0.86 & 614 \\
+    \midrule
+    Accuracy       & \multicolumn{3}{c}{0.89} & 1595 \\
+    Macro avg      & 0.89 & 0.88 & 0.89 & 1595 \\
+    Weighted avg   & 0.89 & 0.89 & 0.89 & 1595 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsubsection{MLP}
+
+Hyperparamters used for MLP:
+  \begin{itemize}
+    \item \texttt{hidden\_layer\_sizes}: (128, 64)
+    \item \texttt{activation}: 'relu'
+    \item \texttt{solver}: 'adam'
+    \item \texttt{learning\_rate\_init}: 0.001
+    \item \texttt{max\_iter}: 50
+    \item \texttt{batch\_size}: 128
+    \item \texttt{early\_stopping}: True
+    \item \texttt{alpha}: 0.001
+    \item \texttt{random\_state}: 42
+    \item \texttt{verbose}: True
+  \end{itemize}
+
+\begin{table}[H]
+  \centering
+  \caption{MLP Classification Report}
+  \begin{tabular}{lcccc}
+    \toprule
+    Class & Precision & Recall & F1-score & Support \\
+    \midrule
+    0 (Unsuitable) & 0.89 & 0.91 & 0.90 & 981 \\
+    1 (Suitable)   & 0.85 & 0.82 & 0.83 & 614 \\
+    \midrule
+    Accuracy       & \multicolumn{3}{c}{0.87} & 1595 \\
+    Macro avg      & 0.87 & 0.87 & 0.87 & 1595 \\
+    Weighted avg   & 0.87 & 0.87 & 0.87 & 1595 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\textwidth]{images/mlp_val.png}
+  \caption{MLP validation accuracy and loss curves over training epochs.}
+  \label{fig:mlp-validation-curve}
+\end{figure}
+
+\subsubsection{XGBoost}
+
+Hyperparamters used for XGBoost:
+  \begin{itemize}
+    \item \texttt{n\_estimators}: 300
+    \item \texttt{max\_depth}: 6
+    \item \texttt{learning\_rate}: 0.1
+    \item \texttt{subsample}: 0.8
+    \item \texttt{colsample\_bytree}: 0.8
+    \item \texttt{random\_state}: 42
+    \item \texttt{eval\_metric}: 'logless'
+  \end{itemize}
+
+\begin{table}[H]
+  \centering
+  \caption{XGBoost Classification Report}
+  \begin{tabular}{lcccc}
+    \toprule
+    Class & Precision & Recall & F1-score & Support \\
+    \midrule
+    0 (Unsuitable) & 0.83 & 0.94 & 0.88 & 981 \\
+    1 (Suitable)   & 0.88 & 0.70 & 0.78 & 614 \\
+    \midrule
+    Accuracy       & \multicolumn{3}{c}{0.85} & 1595 \\
+    Macro avg      & 0.86 & 0.82 & 0.83 & 1595 \\
+    Weighted avg   & 0.85 & 0.85 & 0.84 & 1595 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\newpage
+
+\subsection{CNN Classification Model}
+
+The model was trained over \textbf{20 epochs} with the following results:
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\textwidth]{images/training_curves.png}
+  \caption{CNN training and validation accuracy/loss curves over epochs.}
+  \label{fig:cnn-training-curves}
+\end{figure}
+
+\begin{table}[H]
+  \centering
+  \caption{CNN Model Test Results}
+  \begin{tabular}{lcc}
+    \toprule
+    Metric & Value \\
+    \midrule
+    Loss        & 0.0722 \\
+    Accuracy    & 0.9776 \\
+    Precision   & 0.9784 \\
+    Recall      & 0.9776 \\
+    F1-Score    & 0.9774 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[H]
+  \centering
+  \caption{CNN Model Confusion Matrix}
+  \begin{tabular}{lcc}
+    \toprule
+    & Predicted 0 & Predicted 1 \\
+    \midrule
+    Actual 0 & 500 & 0 \\
+    Actual 1 & 18  & 285 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+For further validation an interactive map of a zone with already built
+hydropower plants and many rivers was created to test the model. The map
+consists of a bounding box that is split into smaller pictures, each one
+classifed by the model as follows:
+
+\begin{table}[H]
+  \centering
+  \caption{Interactive Map Classification Summary}
+  \begin{tabular}{lcc}
+    \toprule
+    Parameter & Value \\
+    \midrule
+    Grid Shape & $72 \times 177$ \\
+    Total Cells & 12,744 \\
+    Classified Cells & 12,744 \\
+    Class Distribution & Hydro Potential: 878 \\
+                       & No Hydro: 11,866 \\
+    Average Confidence & 0.930 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\textwidth]{images/classification_map.png}
+  \caption{Simple map showing the classification results for hydropower
+  site suitability.}
+  \label{fig:classification-map}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\textwidth]{images/map.png}
+  \caption{Screenshot of the interactive map used for model validation. The map
+  displays classified regions with hydro potential and unsuitable locations,
+  allowing for visual inspection and further analysis. Each cell represents a
+  classified region, with color coding for hydro potential and unsuitable
+  locations.}
+  \label{fig:interactive-map-screenshot}
+\end{figure}
+
+\newpage
 % -----------------------------------------------------------------------------
 \section{Conclusion}
+
+\subsection{CNN vs Traditional Models}
+
+The results demonstrate that the CNN based approach significantly outperformed
+the traditional tabular models, achieving a test accuracy of 97.76\% compared
+to the Random Forest's 89\% accuracy. This substantial performance difference
+highlights the advantage of treating the problem as an image classification
+task, where spatial relationships and contextual information can be better
+captured through convolutional layers.
+
+\subsection{Model Limitations}
+
+The CNN model has a tendency toward false positives, particularly in open fields
+areas, as seen from the testing presented with the interactive map. Adjusting
+the weights of the input channels seemed to reduce this behaviour, but it is
+still not prefect and flase positives are still present. This limitation could
+be explained by the relatively small training dataset size of approximately
+8,000 samples (3,000 positive and 5,000 negative).
+\\
+\\
+Additionally, the feature extraction and selection process was conducted with
+limited guidance from existing research papers on machine learing use in
+hydropower site suitability. The choice of spectral indices (NDVI, NDWI, NDBI,
+MNDWI), topographic parameters (elevation, slope), and environmental variables
+(discharge, precipitation) was based on general principles of environmental
+analysis. This somewhat arbitrary feature selection may have resulted in
+suboptimal representation of the atributes needed for hydropower site assessment.
+
+\subsection{Future Work and Imporvements}
+
+Several directions for future research and development emerge from this work:
+
+\begin{itemize}
+  \item Dataset Expansion: Collecting additional training samples, particularly
+  from diverse geographical regions and environmental conditions, would likely
+  improve model robustness and reduce false positive rates.
+  \item Feature Engineering: Incorporating additional environmental parameters
+  such as seasonal flow variations, soil stability indices, and proximity to
+  existing infrastructure could enhance prediction accuracy.
+  \item Temporal Dynamics: Integrating time-series satellite data to capture
+  ong-term environmental variations would provide a more comprehensive assessment.
+\end{itemize}
+
+\subsection{Final Statements}
+The integration of machine learning techniques with traditional site assessment
+methodologies offers the potential to significantly improve the efficiency and
+effectiveness of renewable energy development planning, contributing to more
+sustainable energy infrastructure deployment.
 
 % -----------------------------------------------------------------------------
 
