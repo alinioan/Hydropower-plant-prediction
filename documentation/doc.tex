@@ -59,9 +59,9 @@ The objective is to identify optimal locations for new hydropower plants by
 analyzing a variety of environmental factors using supervised learning. While
 there is limited available research that directly uses machine learning models
 in the analysis of site suitability for hydropower sites, our method, with the
-use of satellite imagery, has the advantage that it can potentially uncovere
+use of satellite imagery, has the advantage that it can potentially uncover
 suitable locations that may not be considered by typical manual or rule-based
-analyses.
+analysis.
 \\
 \\
 We decided to use two approaches, resulting in two ML pipelines. The two
@@ -427,6 +427,54 @@ classifed by the model as follows:
   locations.}
   \label{fig:interactive-map-screenshot}
 \end{figure}
+
+\subsubsection{Feature Analysis}
+To better understand the decision-making process of our CNN model, we analyzed
+several representative examples of locations classified as suitable for
+hydropower development. 
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=1\textwidth]{images/example1.png}
+  \caption{Example 1: Location classified as suitable for hydropower development.}
+  \label{fig:example1}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=1\textwidth]{images/example2.png}
+  \caption{Example 2: Location classified as suitable for hydropower development.}
+  \label{fig:example2}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=1\textwidth]{images/example3.png}
+  \caption{Example 3: Location classified as suitable for hydropower development.}
+  \label{fig:example3}
+\end{figure}
+
+\textbf{Common Patterns in Positive Classifications}
+\\
+\\
+Figures~\ref{fig:example1}, \ref{fig:example2}, and \ref{fig:example3}
+are some examples that the CNN model classified as suitable hydropower sites.
+\begin{itemize}
+  \item \textbf{Distinctive Linear Water Features:} All three positive examples
+  exhibit pronounced linear patterns in their water-related spectral indices,
+  particularly visible in the NDWI and MNDWI channels. These linear features
+  represent well-defined river corridors or water channels that are essential
+  for hydropower development.
+  \item \textbf{Optimal Topographic Characteristics:} The positive examples
+  consistently show moderate elevation ranges with sufficient topographic
+  variation to provide natural head for power generation. Despite different
+  absolute elevations, all sites maintain moderate slope characteristics that
+  indicate gentle to moderate gradients suitable for run-of-river installations
+  without requiring extensive earthworks.
+  \item \textbf{Minimal Built-up Development:} All positive examples demonstrate
+  consistently low NDBI values, confirming minimal existing development.
+\end{itemize}
+
 
 \newpage
 % -----------------------------------------------------------------------------
